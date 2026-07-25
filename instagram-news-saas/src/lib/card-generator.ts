@@ -162,50 +162,73 @@ function makeGradientBg(panelColor: string, hookText: string): string {
   </svg>`
 }
 
+type Template = 'A' | 'B' | 'C' | 'D'
+
+// 숫자 포함 헤드라인 → A 우선, 그 외 → 랜덤 4종
+function pickTemplate(headline: string): Template {
+  if (/\d+[\d,억만천명건년원개%]+/.test(headline)) return 'A'
+  const r = Math.random()
+  if (r < 0.25) return 'A'
+  if (r < 0.50) return 'B'
+  if (r < 0.75) return 'C'
+  return 'D'
+}
+
 export async function generateTextCard(data: CardData): Promise<Buffer> {
   const cat = CAT_COLOR[data.category] || CAT_COLOR.general
+  const template = pickTemplate(data.headline)
+  const hook = pickHook(data)
+  console.log(`[card] template=${template} category=${data.category}`)
 
-  // 하단 패널만 합성 (상단 요소 일절 금지 — 이미지 가리지 않음)
-  const compose = async (bgBuffer: Buffer): Promise<Buffer> => {
-    const bottom = await sharp(Buffer.from(makeBottomPanel({
-      headline: data.headline, panelColor: cat.panel, source: data.source
-    }))).resize(1080, 1080).toBuffer()
-    return sharp(bgBuffer)
-      .composite([{ input: bottom, top: 0, left: 0 }])
-      .jpeg({ quality: 92 })
-      .toBuffer()
-  }
+  // Template A: 이미지 배경 + 하단 패널 (기존 디자인)
+  if (template === 'A') {
+    const composeA = async (bgBuffer: Buffer): Promise<Buffer> => {
+      const bottom = await sharp(Buffer.from(makeBottomPanel({
+        headline: data.headline, panelColor: cat.panel, source: data.source
+      }))).resize(1080, 1080).toBuffer()
+      return sharp(bgBuffer)
+        .composite([{ input: bottom, top: 0, left: 0 }])
+        .jpeg({ quality: 92 })
+        .toBuffer()
+    }
 
-  // 1순위: 기사 원본 사진 (가장 신뢰감 있는 카드뉴스)
-  if (data.newsImageUrl) {
-    const bg = await prepareBackgroundImage(data.newsImageUrl)
-    if (bg) {
-      console.log(`[card] composing news photo + headline + panel`)
-      return compose(bg)
+    if (data.newsImageUrl) {
+      const bg = await prepareBackgroundImage(data.newsImageUrl)
+      if (bg) {
+        console.log(`[card] A: news photo + headline + panel`)
+        return composeA(bg)
+      }
+    }
+    if (!process.env.HUGGINGFACE_API_KEY) {
+      console.log(`[card] A: gradient fallback (no HF key)`)
+      return composeA(Buffer.from(makeGradientBg(cat.panel, hook)))
+    }
+    try {
+      const prompt = makeImagePrompt(data.headline, data.category)
+      console.log(`[card] A: AI image: ${prompt.substring(0, 80)}...`)
+      const aiImage = await generateImage(prompt, 1080, 1080)
+      const aiBuffer = Buffer.from(await aiImage.arrayBuffer())
+      const bg = await sharp(aiBuffer).resize(1080, 1080, { fit: 'cover' }).toBuffer()
+      console.log(`[card] A: compositing AI bg + headline + panel`)
+      return composeA(bg)
+    } catch {
+      console.log(`[card] A: AI failed, gradient fallback`)
+      return composeA(Buffer.from(makeGradientBg(cat.panel, hook)))
     }
   }
 
-  // 2순위: 그라데이션 배경 (FLUX 실패/미사용 시 즉시 폴백 — 무한 대기 방지)
-  if (!process.env.HUGGINGFACE_API_KEY) {
-    console.log(`[card] gradient fallback (no HF key)`)
-    const bg = Buffer.from(makeGradientBg(cat.panel, pickHook(data)))
-    return compose(bg)
+  // Template B/C/D: 이미지 불필요 — SVG 단일 버퍼로 직접 렌더링
+  let svg: string
+  const shared = { headline: data.headline, panelColor: cat.panel, source: data.source, hookText: hook }
+  if (template === 'B') {
+    svg = makeTemplateB(shared)
+  } else if (template === 'C') {
+    svg = makeTemplateC(shared)
+  } else {
+    svg = makeTemplateD(shared)
   }
 
-  // 3순위: AI 생성 배경 (FLUX) — 키가 있고 이전 실패가 없을 때만 시도
-  try {
-    const prompt = makeImagePrompt(data.headline, data.category)
-    console.log(`[card] AI image: ${prompt.substring(0, 80)}...`)
-    const aiImage = await generateImage(prompt, 1080, 1080)
-    const aiBuffer = Buffer.from(await aiImage.arrayBuffer())
-    const bg = await sharp(aiBuffer).resize(1080, 1080, { fit: 'cover' }).toBuffer()
-    console.log(`[card] compositing AI bg + headline + panel`)
-    return compose(bg)
-  } catch (e) {
-    console.log(`[card] AI image failed, gradient fallback`)
-    const bg = Buffer.from(makeGradientBg(cat.panel, pickHook(data)))
-    return compose(bg)
-  }
+  return sharp(Buffer.from(svg)).resize(1080, 1080).jpeg({ quality: 92 }).toBuffer()
 }
 
 // 이미지 없는 카드용 본문 훅 — content 첫 문장(숫자/사실 위주) 추출
@@ -223,6 +246,121 @@ function pickHook(data: CardData): string {
   if (src.length < 10) src = boiler(data.summary || '')
   const firstSentence = src.split(/(?<=[.!?])\s/)[0] || src
   return firstSentence.substring(0, 70)
+}
+
+// ── Template B: 좌우 분할 — 좌측 그라데이션 + 우측 헤드라인 ──
+function makeTemplateB(opts: {
+  headline: string
+  panelColor: string
+  source?: string
+  hookText?: string
+}): string {
+  const { headline, panelColor, source, hookText } = opts
+  const headLines = wrapHeadline(headline).slice(0, 3)
+  const headSvg = headLines.map((line, i) =>
+    `<text x="580" y="${440 + i * 78}" fill="#ffffff" font-size="58" font-weight="900" font-family="${FONT_FAMILY}, sans-serif" stroke="#0a0a0f" stroke-width="3" paint-order="stroke" letter-spacing="1">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const hookLines = hookText ? wrapText(hookText, 14).slice(0, 3) : []
+  const hookSvg = hookLines.map((line, i) =>
+    `<text x="580" y="${620 + i * 48}" fill="rgba(255,255,255,0.75)" font-size="32" font-weight="600" font-family="${FONT_FAMILY}, sans-serif">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const srcText = source ? `출처: ${escapeXml(source)}` : ''
+
+  return `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="leftGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="${panelColor}"/>
+        <stop offset="100%" stop-color="#0a0a0f"/>
+      </linearGradient>
+    </defs>
+    <rect width="1080" height="1080" fill="#0a0a0f"/>
+    <rect x="0" y="0" width="500" height="1080" fill="url(#leftGrad)"/>
+    <rect x="500" y="0" width="8" height="1080" fill="rgba(255,255,255,0.15)"/>
+    ${headSvg}
+    ${hookSvg}
+    <text x="580" y="1000" fill="rgba(255,255,255,0.5)" font-size="22" font-weight="500" font-family="${FONT_FAMILY}, sans-serif">@jungbobada_news ${srcText ? '· ' + srcText : ''}</text>
+  </svg>`
+}
+
+// ── Template C: 클린 미니멀 — 단색 배경 + 중앙 정렬 헤드라인 ──
+function makeTemplateC(opts: {
+  headline: string
+  panelColor: string
+  source?: string
+  hookText?: string
+}): string {
+  const { headline, panelColor, source, hookText } = opts
+  const headLines = wrapHeadline(headline).slice(0, 3)
+  const totalH = headLines.length * 78
+  const startY = 540 - totalH / 2
+
+  const headSvg = headLines.map((line, i) =>
+    `<text x="540" y="${startY + i * 78}" text-anchor="middle" fill="#ffffff" font-size="60" font-weight="900" font-family="${FONT_FAMILY}, sans-serif" letter-spacing="1">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const hookLines = hookText ? wrapText(hookText, 20).slice(0, 2) : []
+  const hookStartY = startY + totalH + 40
+  const hookSvg = hookLines.map((line, i) =>
+    `<text x="540" y="${hookStartY + i * 48}" text-anchor="middle" fill="rgba(255,255,255,0.65)" font-size="30" font-weight="600" font-family="${FONT_FAMILY}, sans-serif">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const srcText = source ? `출처: ${escapeXml(source)}` : ''
+
+  return `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="cleanBg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${panelColor}"/>
+        <stop offset="100%" stop-color="#0a0a0f"/>
+      </linearGradient>
+    </defs>
+    <rect width="1080" height="1080" fill="url(#cleanBg)"/>
+    ${headSvg}
+    ${hookSvg}
+    <text x="540" y="1000" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-size="22" font-weight="500" font-family="${FONT_FAMILY}, sans-serif">@jungbobada_news ${srcText ? '· ' + srcText : ''}</text>
+  </svg>`
+}
+
+// ── Template D: 타이포 강조 — 상단 대형 숫자/키워드 + 하단 보조 텍스트 ──
+function makeTemplateD(opts: {
+  headline: string
+  panelColor: string
+  source?: string
+  hookText?: string
+}): string {
+  const { headline, panelColor, source, hookText } = opts
+  // 숫자 추출 시도 — 없으면 첫 2글자
+  const numMatch = headline.match(/\d+[\d,억만천명건년원개%]+/)
+  const bigText = numMatch ? numMatch[0] : headline.substring(0, 6)
+  const rest = headline.replace(bigText, '').trim() || headline
+
+  const restLines = wrapText(rest, 16).slice(0, 3)
+  const restSvg = restLines.map((line, i) =>
+    `<text x="540" y="${560 + i * 60}" text-anchor="middle" fill="#ffffff" font-size="42" font-weight="700" font-family="${FONT_FAMILY}, sans-serif" stroke="#0a0a0f" stroke-width="2" paint-order="stroke" letter-spacing="0.5">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const hookLines = hookText ? wrapText(hookText, 20).slice(0, 2) : []
+  const hookSvg = hookLines.map((line, i) =>
+    `<text x="540" y="${760 + i * 46}" text-anchor="middle" fill="rgba(255,255,255,0.6)" font-size="28" font-weight="600" font-family="${FONT_FAMILY}, sans-serif">${escapeXml(line)}</text>`
+  ).join('\n')
+
+  const srcText = source ? `출처: ${escapeXml(source)}` : ''
+
+  return `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="typoBg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="${panelColor}"/>
+        <stop offset="100%" stop-color="#0a0a0f"/>
+      </linearGradient>
+    </defs>
+    <rect width="1080" height="1080" fill="url(#typoBg)"/>
+    <text x="540" y="420" text-anchor="middle" fill="rgba(255,255,255,0.12)" font-size="180" font-weight="900" font-family="${FONT_FAMILY}, sans-serif">${escapeXml(bigText)}</text>
+    <text x="540" y="480" text-anchor="middle" fill="#ffffff" font-size="64" font-weight="900" font-family="${FONT_FAMILY}, sans-serif" stroke="#0a0a0f" stroke-width="3" paint-order="stroke" letter-spacing="2">${escapeXml(bigText)}</text>
+    ${restSvg}
+    ${hookSvg}
+    <text x="540" y="1000" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-size="22" font-weight="500" font-family="${FONT_FAMILY}, sans-serif">@jungbobada_news ${srcText ? '· ' + srcText : ''}</text>
+  </svg>`
 }
 
 function makeImagePrompt(headline: string, category: string): string {

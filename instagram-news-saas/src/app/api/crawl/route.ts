@@ -46,8 +46,17 @@ async function storeFiltered(
 ) {
   if (articles.length === 0) return
 
+  // 당일 필터 — 오늘 날짜(KST) 기사만 통과
+  const now = new Date()
+  const todayKST = new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const todayArticles = articles.filter(a => {
+    const pubKST = new Date(a.publishedAt.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return pubKST === todayKST
+  })
+  if (todayArticles.length === 0) { results.filtered += articles.length; return }
+
   // 1차: 휴리스틱 바이럴 스코어로 빠르게 필터 (API 호출 없음)
-  const candidates = articles.map((a, i) => ({
+  const candidates = todayArticles.map((a, i) => ({
     article: a,
     index: i,
     heuristicScore: viralScore(a.title, a.content, a.category)
@@ -95,6 +104,17 @@ async function storeFiltered(
 export async function POST() {
   try {
     const results = { crawled: 0, withImage: 0, filtered: 0, errors: [] as string[] }
+
+    // 크롤링 시작 시 기존 콘텐츠 초기화 — 오늘자 뉴스만 유지
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const todayIso = todayStart.toISOString()
+    await execute('DELETE FROM GenerationLog WHERE newsId IN (SELECT id FROM News WHERE crawledAt < ?)', [todayIso])
+    await execute('DELETE FROM Image WHERE newsId IN (SELECT id FROM News WHERE crawledAt < ?)', [todayIso])
+    await execute('DELETE FROM Copy WHERE newsId IN (SELECT id FROM News WHERE crawledAt < ?)', [todayIso])
+    await execute('DELETE FROM News WHERE crawledAt < ?', [todayIso])
+    // public/uploads 폴더里的 어제 파일도 정리
+    console.log(`[crawl] 초기화 완료 — ${todayIso} 이전 뉴스/콘텐츠 삭제`)
 
     // 1) RSS 피드
     for (const feed of KOREAN_NEWS_FEEDS) {

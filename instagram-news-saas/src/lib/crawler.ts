@@ -158,7 +158,7 @@ export async function crawlRSS(feedUrl: string, source: string) {
       if (!item.title || !item.link) continue
 
       const pubDate = item.pubDate ? new Date(item.pubDate) : null
-      if (pubDate && !isToday(pubDate)) continue
+      if (!pubDate || !isToday(pubDate)) continue
 
       let content = item.content || item.contentSnippet || ''
       let $c = cheerio.load(content)
@@ -313,6 +313,12 @@ export async function scrapeNaverNews(sectionId: string, source: string) {
 
       const $parent = $a.closest('div, li, article')
       const snippet = $parent.find('span, p, div').text().trim().substring(0, 300)
+
+      // 시간 정보 추출 — "1일 전", "2일 전" 등 어제 기사 필터링
+      const timeText = $parent.find('time, .time, [class*="time"], [class*="date"]').text().trim()
+      const fullText = $parent.text()
+      const dayMatch = fullText.match(/(\d+)\s*일\s*전/)
+      if (dayMatch && parseInt(dayMatch[1]) >= 1) return  // 1일 전 이상이면 스킵
 
       let imageUrl: string | null = null
       const img = $parent.find('img').first().attr('src')
