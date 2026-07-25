@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model News {
+  id            String   @id @default(cuid())
+  title         String
+  content       String
+  summary       String
+  source        String
+  sourceUrl     String   @unique
+  category      String
+  publishedAt   DateTime
+  crawledAt     DateTime @default(now())
+  viralScore    Float?
+  sentiment     String?
+  keywords      String?
+  isSelected    Boolean  @default(false)
+  isPosted      Boolean  @default(false)
+  copies        Copy[]
+  images        Image[]
+}
+
+model Copy {
+  id          String   @id @default(cuid())
+  newsId      String
+  news        News     @relation(fields: [newsId], references: [id])
+  headline    String
+  body        String
+  hashtags    String
+  tone        String
+  isApproved  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  images      Image[]
+}
+
+model Image {
+  id          String   @id @default(cuid())
+  newsId      String
+  news        News     @relation(fields: [newsId], references: [id])
+  copyId      String?
+  copy        Copy?    @relation(fields: [copyId], references: [id])
+  prompt      String
+  imageUrl    String
+  localPath   String?
+  isGenerated Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+// ============================================================
+// 아래 모델들은 인스타그램 API 연동 시 다시 활성화
+// ============================================================
+// model Post {
+//   id              String   @id @default(cuid())
+//   newsId          String
+//   news            News     @relation(fields: [newsId], references: [id])
+//   copyId          String?
+//   copy            Copy?    @relation(fields: [copyId], references: [id])
+//   imageId         String?
+//   image           Image?   @relation(fields: [imageId], references: [id])
+//   instagramPostId String?
+//   status          String   @default("pending")
+//   scheduledAt     DateTime?
+//   postedAt        DateTime?
+//   caption         String
+//   hashtags        String
+//   errorMessage    String?
+//   createdAt       DateTime @default(now())
+//   analytics       Analytics[]
+// }
+
+// model Analytics {
+//   id             String   @id @default(cuid())
+//   postId         String
+//   post           Post     @relation(fields: [postId], references: [id])
+//   newsId         String
+//   news           News     @relation(fields: [newsId], references: [id])
+//   likes          Int      @default(0)
+//   comments       Int      @default(0)
+//   shares         Int      @default(0)
+//   saves          Int      @default(0)
+//   reach          Int      @default(0)
+//   impressions    Int      @default(0)
+//   engagementRate Float?
+//   fetchedAt      DateTime @default(now())
+// }
+
+// model CompetitorAccount {
+//   id               String   @id @default(cuid())
+//   username         String   @unique
+//   displayName      String
+//   followers        Int      @default(0)
+//   category         String
+//   description      String?
+//   profileImageUrl  String?
+//   isActive         Boolean  @default(true)
+//   lastCheckedAt    DateTime?
+//   posts            CompetitorPost[]
+//   createdAt        DateTime @default(now())
+// }
+
+// model CompetitorPost {
+//   id              String   @id @default(cuid())
+//   accountId       String
+//   account         CompetitorAccount @relation(fields: [accountId], references: [id])
+//   instagramPostId String
+//   caption         String
+//   likes           Int      @default(0)
+//   comments        Int      @default(0)
+//   mediaType       String
+//   postedAt        DateTime
+//   fetchedAt       DateTime @default(now())
+// }
+
+// model Settings {
+//   id    String @id @default(cuid())
+//   key   String @unique
+//   value String
+//   updatedAt DateTime @default(now())
+// }
