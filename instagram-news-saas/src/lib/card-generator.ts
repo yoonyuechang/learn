@@ -98,10 +98,10 @@ async function prepareBackgroundImage(imageUrl: string): Promise<Buffer | null> 
     // 진짜 이미지인지 sharp 메타데이터로 최종 검증 (깨진/아닌 HTML 등 차단)
     const meta = await sharp(buf).metadata().catch(() => null)
     if (!meta || !meta.width || !meta.height) return null
-    // 로고/워터마크류는 대부분 소형 이미지 — 배경으로 쓰기엔 작으면 차단
-    if (meta.width < 400 || meta.height < 300) return null
+    // 너무 작은 이미지 차단 (아이콘/로고)
+    if (meta.width < 200 || meta.height < 150) return null
     // 극단적 가로 배너(로고 스트립) 차단
-    if (meta.width / meta.height > 3.5) return null
+    if (meta.width / meta.height > 5) return null
     return await sharp(buf)
       .resize(1080, 1080, { fit: 'cover', position: 'center' })
       .modulate({ brightness: 0.5 })
@@ -369,37 +369,46 @@ function makeTemplateD(opts: {
 function makeImagePrompt(headline: string, category: string): string {
   const lower = headline.toLowerCase()
   if (lower.includes('음주') || lower.includes('사고') || lower.includes('교통')) {
-    return 'night city street with car lights, dramatic lighting, moody atmosphere, cinematic photo'
+    return 'dramatic night car crash scene, emergency lights, sparks flying, cinematic photojournalism, high contrast, breaking news atmosphere'
   }
   if (lower.includes('법원') || lower.includes('재판') || lower.includes('구속') || lower.includes('범죄')) {
-    return 'courthouse building exterior, dramatic sky, serious atmosphere, editorial photo'
+    return 'dark courthouse hallway with dramatic shadows, handcuffs on table, noir lighting, cinematic crime documentary style'
   }
   if (lower.includes('정치') || lower.includes('대통령') || lower.includes('국회')) {
-    return 'government building with dramatic clouds, political atmosphere, editorial photography'
+    return 'dramatic government building at night, stormy sky, lightning, intense political atmosphere, editorial photography'
   }
   if (lower.includes('경제') || lower.includes('주식') || lower.includes('부동산')) {
-    return 'city skyline with financial district, dramatic lighting, business atmosphere'
+    return 'crashing stock market screens, red numbers, stressed traders, dramatic financial crisis atmosphere'
   }
   if (lower.includes('기술') || lower.includes('AI') || lower.includes('인공지능')) {
-    return 'futuristic technology concept, glowing circuits, blue tones, digital art'
+    return 'futuristic AI robot eye glowing blue, digital matrix background, sci-fi atmosphere, dramatic lighting'
   }
   if (lower.includes('연예') || lower.includes('드라마') || lower.includes('영화')) {
-    return 'red carpet event lights, entertainment atmosphere, glamorous bokeh'
+    return 'dramatic red carpet flash photography, paparazzi lights, celebrity silhouette, entertainment news atmosphere'
   }
   if (lower.includes('스포츠') || lower.includes('축구') || lower.includes('야구')) {
-    return 'sports stadium with dramatic lights, action atmosphere, editorial photo'
+    return 'epic sports stadium at night, dramatic floodlights, action shot, sports documentary photography'
   }
   if (lower.includes('국제') || lower.includes('미국') || lower.includes('중국')) {
-    return 'world map with dramatic lighting, international news atmosphere'
+    return 'world globe with dramatic red highlights, international crisis atmosphere, geopolitical tension, editorial photo'
+  }
+  if (lower.includes('사건') || lower.includes('사고') || lower.includes('범죄')) {
+    return 'crime scene investigation, yellow tape, dramatic night lighting, police lights, breaking news photojournalism'
+  }
+  if (lower.includes('논란') || lower.includes('갈등') || lower.includes('반발')) {
+    return 'dramatic protest scene, raised fists, intense crowd, dramatic lighting, social conflict photojournalism'
+  }
+  if (lower.includes('피해') || lower.includes('사기') || lower.includes('스캠')) {
+    return 'scam victim holding phone in distress, dramatic lighting, emotional close-up, consumer fraud documentary'
   }
   const catPrompts: Record<string, string> = {
-    politics: 'government building, dramatic sky, serious atmosphere',
-    economy: 'financial district skyline, dramatic lighting',
-    society: 'urban street scene, dramatic documentary style',
-    culture: 'entertainment lights, vibrant atmosphere',
-    tech: 'futuristic technology, glowing digital elements',
-    sports: 'sports stadium, dramatic action lighting',
-    world: 'world globe, dramatic lighting'
+    politics: 'dramatic parliament debate, intense confrontation, political crisis, editorial photography',
+    economy: 'financial district at dusk, dramatic skyline, economic tension, business documentary',
+    society: 'urban street scene at night, dramatic documentary style, breaking news atmosphere',
+    culture: 'dramatic stage performance, spotlight, entertainment atmosphere, cinematic photo',
+    tech: 'futuristic technology explosion, digital particles, sci-fi atmosphere, dramatic lighting',
+    sports: 'epic sports moment, dramatic action shot, stadium atmosphere, sports photojournalism',
+    world: 'world map with conflict zones highlighted, dramatic geopolitical tension, editorial photo'
   }
-  return catPrompts[category] || 'dramatic editorial photograph, high contrast, cinematic'
+  return catPrompts[category] || 'dramatic editorial photograph, high contrast, cinematic, breaking news atmosphere, intense lighting'
 }

@@ -355,7 +355,7 @@ export async function generateCopy(
     return {
       headline: title.substring(0, 25),
       body: `${title}\n\n이 뉴스, 여러분은 어떻게 보셨어요? 댓글로 의견 남겨주세요!`,
-      hashtags: defaultHashtags(category)
+      hashtags: defaultHashtags(category, title, content)
     }
   }
 
@@ -422,8 +422,8 @@ ${clean.substring(0, 700)}
 - 앞 2~3문장: 원문 기반 핵심 요약 (원문에 있는 사실만 사용, 새로운 정보 금지)
 - 마지막 줄: 질문 1개 (독자 참여 유도)
 - 존댓말, 이모지/#/마크다운 금지
-- 총 3~4문장, 카드뉴스로 읽기 좋게 문장을 짧고 명확하게
-- 가독성: 문장은 최대 2줄 이내로, 한 문단에 2~3문장만. 주제가 바뀔 때 빈 줄 하나 넣기`,
+- 충분한 길이감: 최소 5문장 이상, 원문의 구체적 사실을 빠짐없이 담되 읽기 편하게 문단 나누기
+- 가독성: 주제가 바뀔 때 빈 줄 넣기, 너무 긴 문장은 자연스럽게 끊기`,
     450
   )
   const intro = cleanAiText(introRaw) || firstSentence
@@ -445,8 +445,8 @@ ${intro}
 - "~합니다" "~입니다" 존댓말
 - 원문 수치/고유명사 2개 이상 그대로 반영할 것
 - 이모지, "#" 금지
-- 가독성: 문장은 최대 2줄 이내로, 한 문단에 2~3문장만. 주제가 바뀔 때 빈 줄 하나 넣기
-- 총 4~6문장`,
+- 충분한 길이감: 원문의 배경·맥락·영향을 상세히, 읽기 편하게 문단 나누기
+- 가독성: 주제가 바뀔 때 빈 줄 넣기, 너무 긴 문장은 자연스럽게 끊기`,
     550
   )) || ''
 
@@ -468,8 +468,8 @@ ${develop}
 - 감정에 호소하지 말고, 실제 나오는 반응과 논점을 균형 있게
 - "~합니다" "~입니다" 존댓말
 - 이모지, "#" 금지
-- 가독성: 문장은 최대 2줄 이내로, 한 문단에 2~3문장만. 주제가 바뀔 때 빈 줄 하나 넣기
-- 총 4~6문장`,
+- 충분한 길이감: 논란·갈등을 상세히, 읽기 편하게 문단 나누기
+- 가독성: 주제가 바뀔 때 빈 줄 넣기, 너무 긴 문장은 자연스럽게 끊기`,
     550
   )) || ''
 
@@ -487,9 +487,9 @@ ${conflict}
 - 전망/의미 2~3문장만 (질문·CTA는 쓰지 마세요 — 코드가 자동 붙임)
 - "~합니다" "~입니다" 존댓말
 - 이모지, "#" 금지
-- 가독성: 문장은 최대 2줄 이내
-- 2~3문장`,
-    350
+- 충분한 길이감: 전망과 의미를 상세히 서술
+- 가독성: 주제가 바뀔 때 빈 줄 넣기`,
+    450
   )) || ''
 
   // CTA는 코드에서 강제 조립 (이모지/볼드 없이 깔끔하게)
@@ -499,15 +499,15 @@ ${conflict}
   const closingFinal = (closing || '').replace(/@jungbobada_news/g, '').trim()
   const body = [intro, develop, conflict, closingFinal, cta].filter(l => l.trim().length > 0).join('\n\n')
 
-  // 해시태그 — AI 임의 생성 제거(스팸 방지), 카테고리별 엄선 태그만 사용
-  const hashtags = defaultHashtags(category)
+  // 해시태그 — AI 임의 생성 제거(스팸 방지), 카테고리별 엄선 태그 + 동적 키워드 태그
+  const hashtags = defaultHashtags(category, title, clean)
 
   // 카드용 헤드라인 (훅) — 별도 호출
   const headline = await generateCardHeadline(title, content, category)
 
   // 평가 루프 제거 (역효과: AI evaluator가 오히려 점수 깎아 재생성 유발 → 품질 하락)
   // 대신 룰 기반 verifyCaption + 불합격 시 1회 재생성 (룰은 429 위험 없음)
-  let finalBody = cleanAiText(body)
+  let finalBody = body  // cleanAiText는 각 단에서 이미 적용됨 — 이중 적용 방지
   let vfy = verifyCaption(finalBody, clean)
   let retries = 0
   if (!vfy.ok) {
@@ -518,8 +518,8 @@ ${conflict}
 [기사 원문] ${clean.substring(0, 1000)}
 규칙:
 - 원문에 실제로 있는 수치(금액/날짜/인원/기간)·인물·기관·발언(인용)을 최대한 많이 반영. 원문에 없는 사실·수치·인물은 절대 지어내지 마세요(임의 조합 금지).
-- 원문을 충실히 요약하되 최소 8줄 이상, 300자 이상의 알찬 본문으로 작성
-- 가독성: 문장은 최대 2줄 이내, 한 문단에 2~3문장만. 주제 전환 시 빈 줄 넣기. 총 8~12문장
+- 원문을 충실히 요약하되 최소 300자 이상의 알찬 본문으로 작성 (8줄 이상 권장)
+- 가독성: 읽기 편하게 문단 나누기, 주제 전환 시 빈 줄 넣기
 - 이모지/# 금지, 리스트(1. 2. 3.) 금지, 볼드마커(**) 금지, 한경/구독유도 문구 금지
 - 마지막에 질문 1개`,
       700, 0.7
@@ -551,7 +551,7 @@ function cleanAiText(text: string): string {
     .replace(/\p{Extended_Pictographic}/gu, '') // 이모지 제거
     .replace(/^\s*\d+\.\s/gm, '')         // 리스트 형태(1. 2. 3.) 제거
     .replace(/[*]{2,}/g, '')             // 볼드 마커 제거
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{4,}/g, '\n\n\n')  // 3줄 이상 연속은 2줄로 (문단 구분 보존)
     .replace(/^[#\-*]\s*/gm, '')
     // AI 요약/딜리버러블 톤 불필요 문구 제거
     .replace(/^(위 기사의 요약입니다\.?|이상입니다\.?|요약하자면,?|정리하자면,?|결론적으로,?|뉴스 정보 제공\.?|기사 요약\.?|요약 본문\.?)/gm, '')
@@ -578,23 +578,69 @@ function sentencesFromContent(content: string, start: number, end: number): stri
     .join(' ')
 }
 
-export function defaultHashtags(category: string): string {
-  // 인스타 SEO 전략: 대형(도달) 2~3개 + 중형(카테고리) 3~4개 + 니체/브랜드(랭킹 가능) 3~4개 혼합
-  // - #뉴스/#속보 같은 초대형 태그만 쓰면 수 초 만에 피드에서 밀려나므로 니체 태그로 '인기 게시물' 랭킹을 노림
-  // - 총 9~11개 유지 (30개 꽉 채우기는 스팸 신호), 카테고리 무관 태그 조합 금지
-  // - 브랜드 태그 #정보바다뉴스 는 모든 게시물 공통 → 계정 아카이브/재방문 유도
+export function defaultHashtags(category: string, title: string = '', content: string = ''): string {
+  // 고정 브랜드 + 카테고리별 핵심 태그
   const base = '#뉴스 #시사 #정보바다뉴스'
   const cat: Record<string, string> = {
-    politics: '#정치뉴스 #국회 #정치이슈 #시사상식 #오늘의정치 #국정감사',
-    economy: '#경제뉴스 #재테크 #부동산뉴스 #금리인상 #경제공부 #주식뉴스',
-    society: '#사회뉴스 #사건사고 #사회이슈 #오늘의이슈 #실시간이슈 #생활정보',
-    culture: '#연예뉴스 #연예이슈 #방송이슈 #케이팝뉴스 #문화뉴스 #셀럽소식',
-    tech: '#IT뉴스 #테크뉴스 #인공지능뉴스 #스타트업 #IT트렌드 #신기술',
-    sports: '#스포츠뉴스 #축구뉴스 #야구뉴스 #국가대표 #스포츠이슈 #K리그',
-    world: '#국제뉴스 #해외뉴스 #국제이슈 #세계정세 #글로벌뉴스 #외신',
-    general: '#뉴스큐레이션 #오늘의이슈 #시사정보 #이슈정리 #상식뉴스'
+    politics: '#정치뉴스 #국회 #정치이슈 #시사상식 #오늘의정치 #국정감사 #대통령 #여당 #야당 #정치면',
+    economy: '#경제뉴스 #재테크 #부동산뉴스 #금리인상 #경제공부 #주식뉴스 #코스피 #부동산 #물가 #경제이슈',
+    society: '#사회뉴스 #사건사고 #사회이슈 #오늘의이슈 #실시간이슈 #생활정보 #경찰 #범죄 #사건 #사고',
+    culture: '#연예뉴스 #연예이슈 #방송이슈 #케이팝뉴스 #문화뉴스 #셀럽소식 #아이돌 #드라마 #영화 #가수',
+    tech: '#IT뉴스 #테크뉴스 #인공지능뉴스 #스타트업 #IT트렌드 #신기술 #AI #테크 #디지털 #플랫폼',
+    sports: '#스포츠뉴스 #축구뉴스 #야구뉴스 #국가대표 #스포츠이슈 #K리그 #프로야구 #EPL #월드컵 #올림픽',
+    world: '#국제뉴스 #해외뉴스 #국제이슈 #세계정세 #글로벌뉴스 #외신 #미국 #중국 #일본 #유럽',
+    general: '#뉴스큐레이션 #오늘의이슈 #시사정보 #이슈정리 #상식뉴스 #뉴스레터 #정보공유 #뉴스봇 #데일리뉴스 #화제의뉴스'
   }
-  return `${base} ${cat[category] || cat.general}`
+  let tags = `${base} ${cat[category] || cat.general}`
+
+  // 제목/본문에서 키워드 추출 → 동적 해시태그
+  const text = `${title} ${content}`
+  const keywordMap: Record<string, string> = {
+    '트럼프': '#트럼프 #미국대선', '이재명': '#이재명', '한동훈': '#한동훈', '윤석열': '#윤석열',
+    '탄핵': '#탄핵', '국회': '#국회', '부동산': '#부동산', '아파트': '#아파트',
+    '금리': '#금리', '주식': '#주식', '코스피': '#코스피', '물가': '#물가',
+    '사건': '#사건', '사고': '#사고', '범죄': '#범죄', '사기': '#사기',
+    '음주운전': '#음주운전', '성범죄': '#성범죄', '살인': '#살인',
+    '연예인': '#연예인', '아이돌': '#아이돌', '드라마': '#드라마', '영화': '#영화',
+    '축구': '#축구', '야구': '#야구', '올림픽': '#올림픽', '월드컵': '#월드컵',
+    'AI': '#AI', '인공지능': '#인공지능', '기술': '#기술',
+    '미국': '#미국', '중국': '#중국', '일본': '#일본', '러시아': '#러시아', '우크라이나': '#우크라이나',
+    '교육': '#교육', '수능': '#수능', '대학': '#대학', '의대': '#의대',
+    '병원': '#병원', '의료': '#의료', '건강': '#건강',
+    '가격': '#가격', '인상': '#인상', '인하': '#인하', '할인': '#할인',
+    '세금': '#세금', '보험': '#보험', '대출': '#대출', '이자': '#이자',
+    '배달': '#배달', '플랫폼': '#플랫폼', '택배': '#택배',
+    'SNS': '#SNS', '유튜브': '#유튜브', '인터넷': '#인터넷',
+    '속보': '#속보', '긴급': '#긴급', 'breaking': '#속보',
+    '분노': '#분노', '공분': '#공분', '논란': '#논란', '갈등': '#갈등',
+    '충격': '#충격', '경악': '#경악', '폭로': '#폭로', '황당': '#황당'
+  }
+
+  const dynamicTags: string[] = []
+  for (const [keyword, tag] of Object.entries(keywordMap)) {
+    if (text.includes(keyword) && !tags.includes(tag)) {
+      dynamicTags.push(tag)
+    }
+  }
+
+  // 카테고리별 추가 인기 태그
+  const trendingTags: Record<string, string[]> = {
+    politics: ['#정치', '#대선', '#여론조사', '#정치인', '#의원', '#공약'],
+    economy: ['#경제', '#주식시장', '#투자', '#가상화폐', '#코인', '#취업'],
+    society: ['#사건사고', '#社会', '#뉴스', '#이슈', '#화제', '#실화'],
+    culture: ['#연예', '#스타', '#방송', '#예능', '#음악', '#뮤직뱅크'],
+    tech: ['#테크', '#스마트폰', '#갤럭시', '#아이폰', '#앱', '#서비스'],
+    sports: ['#스포츠', '#야구', '#축구', '#농구', '#배구', '#UFC'],
+    world: ['#국제', '#세계', '#뉴스', '#외교', '#안보', '#통상'],
+    general: ['#뉴스', '#정보', '#상식', '#이슈', '#화제', '#핫이슈']
+  }
+
+  const catTrending = trendingTags[category] || trendingTags.general
+  const needed = 20 - tags.split(' ').length - dynamicTags.length
+  const extra = catTrending.filter(t => !tags.includes(t)).slice(0, Math.max(0, needed))
+
+  tags += ` ${dynamicTags.join(' ')} ${extra.join(' ')}`
+  return tags.trim()
 }
 
 function generateFallbackCopy(title: string, content: string, category: string): { headline: string; body: string; hashtags: string } {

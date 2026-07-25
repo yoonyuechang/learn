@@ -154,7 +154,7 @@ export async function crawlRSS(feedUrl: string, source: string) {
     const feed = await parser.parseURL(feedUrl)
     const articles = []
 
-    for (const item of feed.items.slice(0, 30)) {
+    for (const item of feed.items.slice(0, 70)) {
       if (!item.title || !item.link) continue
 
       const pubDate = item.pubDate ? new Date(item.pubDate) : null
@@ -212,7 +212,7 @@ export async function crawlRSS(feedUrl: string, source: string) {
       // 본문이 없거나 구글 플레이스홀더면 제외 (AI가 엉뚱한 글 지어내는 원인 차단)
       // 150자 미만만 제외 — 300자는 과도해서 양질 기사까지 버림
       const cleanBody = cleanContent(content).trim()
-      if (cleanBody.length < 150) continue
+      if (cleanBody.length < 100) continue
 
       articles.push({
         title,
@@ -342,7 +342,7 @@ export async function scrapeNaverNews(sectionId: string, source: string) {
     })
 
     // 기사 본문 직접 수집 (병렬 5개씩)
-    const batch = articles.slice(0, 15)
+    const batch = articles.slice(0, 30)
     for (let i = 0; i < batch.length; i += 5) {
       const chunk = batch.slice(i, i + 5)
       const results = await Promise.allSettled(
@@ -365,7 +365,7 @@ export async function scrapeNaverNews(sectionId: string, source: string) {
     const filtered = []
     for (const a of batch) {
       const body = cleanContent(a.content || '').trim()
-      if (body.length < 150) continue
+      if (body.length < 100) continue
       a.content = body.substring(0, 2000)
       a.summary = body.substring(0, 300)
       filtered.push(a)
@@ -386,10 +386,12 @@ export const KOREAN_NEWS_FEEDS = [
   { url: 'https://news.google.com/rss/search?q=%EC%82%AC%EA%B1%B4+%EC%82%AC%EA%B3%A0+%EA%B5%AD%EB%82%B4+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '사건사고' },
   { url: 'https://news.google.com/rss/search?q=%EB%B2%94%EC%A2%8C+%EA%B5%AC%EC%86%8D+%ED%94%BC%ED%95%B4%EC%9E%90+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '범죄피해' },
   { url: 'https://news.google.com/rss/search?q=%EC%82%AC%EA%B8%B0+%ED%94%BC%ED%95%B4+%EB%B3%B4%EC%9D%B4%EC%8A%A4%ED%94%BC%EC%8B%B1+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '사기피해' },
+  { url: 'https://news.google.com/rss/search?q=%EC%9D%80%ED%9D%90%EC%9A%B4%EC%A0%84+%EB%8A%94%ED%9D%90+%EC%9D%B8%EC%82%AC%EA%B1%B4+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '교통사고' },
 
   // ── 논란·갈등·반발 (찬반 논쟁 → 공유/댓글) ──
   { url: 'https://news.google.com/rss/search?q=%EB%85%BC%EB%9E%80+%EB%B0%98%EB%B0%9C+%EC%B2%AD%EC%9B%90+%ED%95%AD%EC%9D%98+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '논란갈등' },
   { url: 'https://news.google.com/rss/search?q=%EB%AF%BC%EC%83%9D%EC%9B%90+%ED%86%B5%ED%99%94+%EA%B3%B5%EB%B6%84+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '민생논란' },
+  { url: 'https://news.google.com/rss/search?q=%EC%A0%9C%EB%8F%84+%EA%B7%BC%EB%A1%9C+%EB%B0%98%EB%B0%9C+%EC%9A%B4%EB%8F%99+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '제도논란' },
 
   // ── 내 삶 직결 (공감·궁금증 → 저장) ──
   { url: 'https://news.google.com/rss/search?q=%EC%A0%84%EC%84%B8+%EB%8C%80%EC%B6%9C+%EC%9D%B4%EC%9E%90+%EA%B8%89%EB%93%B1+when:1d&hl=ko&gl=KR&ceid=KR:ko', source: '부동산금융' },

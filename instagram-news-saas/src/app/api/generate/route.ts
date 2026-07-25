@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       copyResult = {
         headline: title.substring(0, 25),
         body: `${title}\n\n${content.substring(0, 300).split(/[.!?]\s+/).join('\n\n')}\n\n이 뉴스, 여러분은 어떻게 보셨어요? 댓글로 의견 남겨주세요!`,
-        hashtags: defaultHashtags(category)
+        hashtags: defaultHashtags(category, title, content)
       }
     }
 
