@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { queryOne, execute, migrateGenerationLog, ensureTables } from '@/lib/db'
+import { NextResponse } from 'next/server'
+import { queryOne, queryAll, execute, ensureTables } from '@/lib/db'
 import { generateCopy, analyzeViralScore, defaultHashtags } from '@/lib/ai'
 import { generateTextCard } from '@/lib/card-generator'
 
@@ -11,13 +11,29 @@ function cleanImageUrl(url: string | null): string | null {
   return url
 }
 
-export async function POST(request: NextRequest) {
+// POST: 단건 콘텐츠 생성 (newsId 지정)
+// GET: 미생성 뉴스 중 바이럴 상위 자동 선택 후 생성
+export async function POST(request: Request) {
   try {
     await ensureTables()
-    await migrateGenerationLog()
-    const { newsId, reset } = await request.json()
+    const body = await request.json().catch(() => ({}))
+    let newsId = body.newsId as string | undefined
+    const reset = body.reset as boolean
+
+    // newsId 없으면 바이럴 상위 미생성 뉴스 자동 선택
+    if (!newsId) {
+      const top = await queryOne(
+        `SELECT n.id FROM News n
+         WHERE n.viralScore >= 35
+           AND NOT EXISTS (SELECT 1 FROM Copy c WHERE c.newsId = n.id)
+           AND NOT EXISTS (SELECT 1 FROM Image i WHERE i.newsId = n.id)
+         ORDER BY n.viralScore DESC LIMIT 1`
+      )
+      if (top) newsId = String(top.id)
+    }
+
     if (!newsId || typeof newsId !== 'string') {
-      return NextResponse.json({ error: 'newsId가 필요합니다.' }, { status: 400 })
+      return NextResponse.json({ error: '생성 가능한 뉴스가 없습니다.' }, { status: 404 })
     }
 
     const news = await queryOne('SELECT * FROM News WHERE id = ?', [newsId])
@@ -25,34 +41,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '뉴스를 찾을 수 없습니다.' }, { status: 404 })
     }
 
-    // 초기화(reset=true)면 기존 Copy/Image 삭제 후 재생성
     if (reset) {
       await execute('DELETE FROM Copy WHERE newsId = ?', [newsId])
       await execute('DELETE FROM Image WHERE newsId = ?', [newsId])
     }
+
     const title = String(news.title)
     const content = String(news.content)
     const category = String(news.category)
     const newsImageUrl = cleanImageUrl(news.newsImageUrl ? String(news.newsImageUrl) : null)
 
-    // libsql 행 객체 키 확인 (디버그)
-    console.log('[generate] news row keys:', Object.keys(news).join(','), '| viralScore raw:', (news as any).viralScore, '| VS2:', (news as any)['viralScore'])
-
-    // Step 1: Viral score — 크롤 단계에서 Mistral이 매긴 점수를 권위로 사용
-    // (생성 단계의 별도 키워드 heuristic은 0을 남발해 충돌하므로 신뢰하지 않음)
     const rawStored = (news as any).viralScore
     const storedScore = rawStored != null && rawStored !== '' ? Number(rawStored) : null
     const viral = await analyzeViralScore(title, content, category)
     const finalScore = storedScore != null ? storedScore : viral.viralScore
 
-    // 바이럴 스코어 35 미만이면 거부 — 진짜 바이럴만 통과
     if (finalScore < 35) {
       return NextResponse.json({
         success: false,
-        error: `바이럴 점수가 낮습니다 (${finalScore}/100). 사건사고/분노 유발 뉴스를 선택해주세요.`,
+        error: `바이럴 점수가 낮습니다 (${finalScore}/100).`,
         viralScore: finalScore,
         reason: viral.sentiment
-      })
+      }, { status: 422 })
     }
 
     await execute(
@@ -60,11 +70,10 @@ export async function POST(request: NextRequest) {
       [finalScore, viral.sentiment, JSON.stringify(viral.keywords), newsId]
     )
 
-    // Step 2: Generate copy
     let copyResult
     try {
       copyResult = await generateCopy(title, content, category)
-    } catch (error) {
+    } catch {
       copyResult = {
         headline: title.substring(0, 25),
         body: `${title}\n\n${content.substring(0, 300).split(/[.!?]\s+/).join('\n\n')}\n\n이 뉴스, 여러분은 어떻게 보셨어요? 댓글로 의견 남겨주세요!`,
@@ -72,12 +81,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 본문이 비었으면(빈 본문 기사) 발행 안 함 — 부실 캡션 노출 방지
     if (!copyResult.body || copyResult.body.trim().length === 0) {
-      return NextResponse.json({ success: false, error: '본문이 부족해 캡션을 생성하지 않았습니다. (크롤 소스 변경 필요)' }, { status: 422 })
+      return NextResponse.json({ success: false, error: '본문이 부족합니다.' }, { status: 422 })
     }
 
-    // 자기 고도화 루프: 룰 기반 verify 점수/재시도/사유 기록 (크롤 선별 기준 자동 조정 근거)
     await execute(
       'INSERT INTO GenerationLog (newsId, category, score, retries, passed, reason, createdAt) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))',
       [newsId, category, (copyResult as any)._evalScore ?? 0, (copyResult as any)._retries ?? 0, (copyResult as any)._evalScore >= 80 ? 1 : 0, (copyResult as any)._evalReason ?? '']
@@ -90,7 +97,6 @@ export async function POST(request: NextRequest) {
       [copyId, newsId, copyResult.headline, copyResult.body, copyResult.hashtags, 'informative']
     )
 
-    // Step 3: Card image
     const source = String(news.source)
     const imageBuffer = await generateTextCard({
       headline: copyResult.headline,
@@ -102,7 +108,6 @@ export async function POST(request: NextRequest) {
       viralScore: viral.viralScore
     })
 
-    // Vercel 서버리스: 파일시스템 쓰기 불가 → base64로 DB 저장
     const imageBase64 = imageBuffer.toString('base64')
     const imageUrl = `data:image/jpeg;base64,${imageBase64}`
 
@@ -115,19 +120,17 @@ export async function POST(request: NextRequest) {
 
     await execute('UPDATE News SET isSelected = 1 WHERE id = ?', [newsId])
 
-    // 캡션은 본문만 — 해시태그는 별도 필드로 전달해 '첫 댓글'에 게시 (가독성/알고리즘 최적화)
-    const caption = copyResult.body
-
-    // base64 data URL에는 캐시 방지 파라미터 불필요
     return new NextResponse(
       JSON.stringify({
         success: true,
         message: '콘텐츠 생성 완료',
+        newsId,
+        title,
+        viralScore: finalScore,
         copy: { id: copyId, headline: copyResult.headline, body: copyResult.body, hashtags: copyResult.hashtags, _evalScore: (copyResult as any)._evalScore, _retries: (copyResult as any)._retries, _evalReason: (copyResult as any)._evalReason },
         image: { id: imageId, imageUrl, hasNewsImage: !!newsImageUrl },
         engagement: viral.engagement,
-        viralScore: viral.viralScore,
-        caption
+        caption: copyResult.body
       }),
       { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }
     )
@@ -137,5 +140,24 @@ export async function POST(request: NextRequest) {
       { error: '콘텐츠 생성 실패', detail: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     )
+  }
+}
+
+// GET: 전체 미생성 뉴스 일괄 생성 (바이럴 순)
+export async function GET() {
+  try {
+    await ensureTables()
+    const ungenerated = await queryAll(
+      `SELECT n.id, n.title, n.viralScore FROM News n
+       WHERE n.viralScore >= 35
+         AND NOT EXISTS (SELECT 1 FROM Copy c WHERE c.newsId = n.id)
+       ORDER BY n.viralScore DESC LIMIT 10`
+    )
+    return NextResponse.json({
+      total: ungenerated.length,
+      items: ungenerated.map(r => ({ id: r.id, title: r.title, viralScore: r.viralScore }))
+    })
+  } catch (error) {
+    return NextResponse.json({ error: '조회 실패' }, { status: 500 })
   }
 }

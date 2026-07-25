@@ -28,7 +28,6 @@ async function storeFiltered(
   })
   if (todayArticles.length === 0) { results.filtered += articles.length; return }
 
-  // 휴리스틱 스코어 기반 1차 정렬 — 상위 30개만 AI 평가 (API 호출 절약)
   const ranked = todayArticles
     .map((a, i) => ({ article: a, index: i, heuristicScore: viralScore(a.title, a.content, a.category) }))
     .sort((a, b) => b.heuristicScore - a.heuristicScore)
@@ -38,14 +37,12 @@ async function storeFiltered(
     ranked.map(c => ({ title: c.article.title, content: c.article.content }))
   )
 
-  // 최종 스코어 = max(휴리스틱, AI) — 둘 중 높은 쪽
   const scored = ranked.map((c, i) => {
     const aiScore = aiScores.find(s => s.index === i)
     const score = Math.max(c.heuristicScore, aiScore?.score || 0)
     return { ...c, score }
   }).sort((a, b) => b.score - a.score)
 
-  // DB 저장 — 전부 저장, viralScore로 정렬
   for (const { article, score } of scored) {
     const existing = await queryOne('SELECT id FROM News WHERE sourceUrl = ?', [article.sourceUrl])
     if (existing) continue
@@ -61,11 +58,37 @@ async function storeFiltered(
   }
 }
 
-export async function POST() {
+// 병렬 배치 크롤러 — N개씩 동시 처리
+async function crawlBatch(
+  tasks: Array<() => Promise<Array<any>>>,
+  batchSize: number
+): Promise<Array<{ articles: Array<any>; source: string; error?: string }>> {
+  const out: Array<{ articles: Array<any>; source: string; error?: string }> = []
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize)
+    const results = await Promise.allSettled(batch.map(t => t()))
+    for (let j = 0; j < batch.length; j++) {
+      const r = results[j]
+      if (r.status === 'fulfilled') {
+        out.push({ articles: r.value, source: '' })
+      } else {
+        out.push({ articles: [], source: '', error: r.reason?.message || 'fail' })
+      }
+    }
+  }
+  return out
+}
+
+export async function POST(request: Request) {
   try {
     await ensureTables()
     const results = { crawled: 0, withImage: 0, filtered: 0, errors: [] as string[] }
 
+    // URL 파라미터로 배치 제어: ?type=rss | naver | all
+    const url = new URL(request.url)
+    const type = url.searchParams.get('type') || 'all'
+
+    // 기존 콘텐츠 초기화
     const todayStart = new Date()
     todayStart.setHours(0, 0, 0, 0)
     const todayIso = todayStart.toISOString()
@@ -73,25 +96,43 @@ export async function POST() {
     await execute('DELETE FROM Image WHERE newsId IN (SELECT id FROM News WHERE crawledAt < ?)', [todayIso])
     await execute('DELETE FROM Copy WHERE newsId IN (SELECT id FROM News WHERE crawledAt < ?)', [todayIso])
     await execute('DELETE FROM News WHERE crawledAt < ?', [todayIso])
-    console.log(`[crawl] 초기화 완료 — ${todayIso} 이전 뉴스/콘텐츠 삭제`)
+    console.log(`[crawl] 초기화 완료`)
 
-    for (const feed of KOREAN_NEWS_FEEDS) {
-      try {
-        const articles = await crawlRSS(feed.url, feed.source)
-        await storeFiltered(articles, results)
-      } catch (error) {
-        results.errors.push(`${feed.source}: ${error instanceof Error ? error.message : String(error)}`)
+    // RSS + 네이버 병렬 처리 (각 5개씩 동시)
+    const allFeedArticles: Array<{ title: string; content: string; summary: string; source: string; sourceUrl: string; category: string; publishedAt: Date; imageUrl: string | null }> = []
+
+    if (type === 'all' || type === 'rss') {
+      const rssTasks = KOREAN_NEWS_FEEDS.map(feed => async () => {
+        try {
+          return await crawlRSS(feed.url, feed.source)
+        } catch (error) {
+          results.errors.push(`${feed.source}: ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      })
+      const rssResults = await crawlBatch(rssTasks, 5)
+      for (const r of rssResults) {
+        allFeedArticles.push(...r.articles)
       }
     }
 
-    for (const section of NAVER_SECTIONS) {
-      try {
-        const articles = await scrapeNaverNews(section.id, section.source)
-        await storeFiltered(articles, results)
-      } catch (error) {
-        results.errors.push(`${section.source}: ${error instanceof Error ? error.message : String(error)}`)
+    if (type === 'all' || type === 'naver') {
+      const naverTasks = NAVER_SECTIONS.map(section => async () => {
+        try {
+          return await scrapeNaverNews(section.id, section.source)
+        } catch (error) {
+          results.errors.push(`${section.source}: ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      })
+      const naverResults = await crawlBatch(naverTasks, 5)
+      for (const r of naverResults) {
+        allFeedArticles.push(...r.articles)
       }
     }
+
+    // 전체 기사를 한 번에 AI 평가 후 DB 저장
+    await storeFiltered(allFeedArticles, results)
 
     return NextResponse.json({
       success: true,
