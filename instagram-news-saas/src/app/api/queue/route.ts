@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { queryAll, execute } from '@/lib/db'
+import { queryAll, execute, ensureTables } from '@/lib/db'
 
 export async function GET() {
   try {
+    await ensureTables()
     const items = await queryAll(`
       SELECT n.*,
         (SELECT json_object('id', c.id, 'headline', c.headline, 'body', c.body, 'hashtags', c.hashtags)

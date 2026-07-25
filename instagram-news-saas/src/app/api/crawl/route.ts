@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { queryOne, execute } from '@/lib/db'
+import { queryOne, execute, ensureTables } from '@/lib/db'
 import { crawlRSS, scrapeNaverNews, KOREAN_NEWS_FEEDS } from '@/lib/crawler'
 import { preFilterArticles, viralScore } from '@/lib/ai'
 
@@ -46,7 +46,6 @@ async function storeFiltered(
 ) {
   if (articles.length === 0) return
 
-  // 당일 필터 — 오늘 날짜(KST) 기사만 통과
   const now = new Date()
   const todayKST = new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const todayArticles = articles.filter(a => {
@@ -55,7 +54,6 @@ async function storeFiltered(
   })
   if (todayArticles.length === 0) { results.filtered += articles.length; return }
 
-  // 1차: 휴리스틱 바이럴 스코어로 빠르게 필터 (API 호출 없음)
   const candidates = todayArticles.map((a, i) => ({
     article: a,
     index: i,
@@ -64,31 +62,48 @@ async function storeFiltered(
 
   if (candidates.length === 0) { results.filtered += articles.length; return }
 
-  // 2차: AI 사전 필터 — 휴리스틱 통과 기사만 대상 (API 호출 절약)
   const aiScores = await preFilterArticles(
     candidates.map(c => ({ title: c.article.title, content: c.article.content }))
   )
 
+  // AI/휴리스틱 스코어 필터링 → 교차확인 통과 기사만 남김
+  const toCrossCheck: typeof candidates = []
   for (let i = 0; i < candidates.length; i++) {
     const { article, heuristicScore } = candidates[i]
     const aiScore = aiScores.find(s => s.index === i)
     const score = aiScore ? aiScore.score : heuristicScore
+    if (score < VIRAL_THRESHOLD) { results.filtered++; continue }
+    toCrossCheck.push({ ...candidates[i] })
+  }
 
-    if (score < VIRAL_THRESHOLD) {
-      results.filtered++
-      continue
+  // 교차확인 병렬 배치 (5개씩 동시에)
+  const CROSS_BATCH = 5
+  const passed: typeof candidates = []
+  for (let i = 0; i < toCrossCheck.length; i += CROSS_BATCH) {
+    const batch = toCrossCheck.slice(i, i + CROSS_BATCH)
+    const crossResults = await Promise.allSettled(
+      batch.map(c => crossCheckSources(c.article.title))
+    )
+    for (let j = 0; j < batch.length; j++) {
+      const r = crossResults[j]
+      if (r.status === 'fulfilled' && r.value.passes) {
+        passed.push(batch[j])
+      } else if (r.status === 'fulfilled') {
+        console.log(`[crosscheck] 단일 매체 — 배제: ${batch[j].article.title.slice(0, 40)}`)
+        results.filtered++
+      } else {
+        passed.push(batch[j]) // 에러 시 통과
+      }
     }
+  }
 
-    // 교차확인(사실성 검증): 단일 매체만 보도된 사건은 배제
-    const { sources, passes } = await crossCheckSources(article.title)
-    if (!passes) {
-      console.log(`[crosscheck] 단일 매체만 보도 — 배제: ${article.title.slice(0, 40)} (매체: ${sources.join(',')})`)
-      results.filtered++
-      continue
-    }
-
+  // DB 저장
+  for (const { article, index: idx, heuristicScore } of passed) {
     const existing = await queryOne('SELECT id FROM News WHERE sourceUrl = ?', [article.sourceUrl])
     if (existing) continue
+
+    const aiScore = aiScores.find(s => s.index === idx)
+    const score = aiScore ? aiScore.score : heuristicScore
 
     const id = crypto.randomUUID()
     await execute(
@@ -103,6 +118,7 @@ async function storeFiltered(
 
 export async function POST() {
   try {
+    await ensureTables()
     const results = { crawled: 0, withImage: 0, filtered: 0, errors: [] as string[] }
 
     // 크롤링 시작 시 기존 콘텐츠 초기화 — 오늘자 뉴스만 유지

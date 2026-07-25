@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { queryOne, execute, migrateGenerationLog } from '@/lib/db'
+import { queryOne, execute, migrateGenerationLog, ensureTables } from '@/lib/db'
 import { generateCopy, analyzeViralScore, defaultHashtags } from '@/lib/ai'
 import { generateTextCard } from '@/lib/card-generator'
-import fs from 'fs'
-import path from 'path'
 
 function cleanImageUrl(url: string | null): string | null {
   if (!url) return null
@@ -15,6 +13,7 @@ function cleanImageUrl(url: string | null): string | null {
 
 export async function POST(request: NextRequest) {
   try {
+    await ensureTables()
     await migrateGenerationLog()
     const { newsId, reset } = await request.json()
     if (!newsId || typeof newsId !== 'string') {
@@ -103,11 +102,9 @@ export async function POST(request: NextRequest) {
       viralScore: viral.viralScore
     })
 
-    const filename = `${newsId}_${Date.now()}.jpg`
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads')
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
-    fs.writeFileSync(path.join(uploadDir, filename), imageBuffer)
-    const imageUrl = `/uploads/${filename}`
+    // Vercel 서버리스: 파일시스템 쓰기 불가 → base64로 DB 저장
+    const imageBase64 = imageBuffer.toString('base64')
+    const imageUrl = `data:image/jpeg;base64,${imageBase64}`
 
     const imageId = crypto.randomUUID()
     await execute(
@@ -121,13 +118,13 @@ export async function POST(request: NextRequest) {
     // 캡션은 본문만 — 해시태그는 별도 필드로 전달해 '첫 댓글'에 게시 (가독성/알고리즘 최적화)
     const caption = copyResult.body
 
-    const imageUrlCached = `${imageUrl}?t=${Date.now()}`  // 브라우저 캐시 방지
+    // base64 data URL에는 캐시 방지 파라미터 불필요
     return new NextResponse(
       JSON.stringify({
         success: true,
         message: '콘텐츠 생성 완료',
         copy: { id: copyId, headline: copyResult.headline, body: copyResult.body, hashtags: copyResult.hashtags, _evalScore: (copyResult as any)._evalScore, _retries: (copyResult as any)._retries, _evalReason: (copyResult as any)._evalReason },
-        image: { id: imageId, imageUrl: imageUrlCached, hasNewsImage: !!newsImageUrl },
+        image: { id: imageId, imageUrl, hasNewsImage: !!newsImageUrl },
         engagement: viral.engagement,
         viralScore: viral.viralScore,
         caption

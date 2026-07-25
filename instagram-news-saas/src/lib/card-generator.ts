@@ -12,8 +12,11 @@ interface CardData {
   viralScore?: number
 }
 
-// Sharp SVG에서 사용할 폰트 경로 (Windows NotoSansKR Bold)
-const FONT_PATH = 'C:/Windows/Fonts/NotoSansKR-VF.ttf'
+// Sharp SVG에서 사용할 폰트 경로 — Vercel(Linux)과 로컬(Windows) 모두 호환
+import fs from 'fs'
+const LOCAL_FONT = 'C:/Windows/Fonts/NotoSansKR-VF.ttf'
+const VERCEL_FONT = path.resolve(process.cwd(), 'public/fonts/NotoSansKR-VF.ttf')
+const FONT_PATH = fs.existsSync(LOCAL_FONT) ? LOCAL_FONT : VERCEL_FONT
 const FONT_FAMILY = 'NotoSansKR'
 
 // 카테고리별 컬러 (하단 패널 + 뱃지)
